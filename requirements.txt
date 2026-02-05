@@ -1,0 +1,11 @@
+pandas>=2.0.0
+datasets>=2.14.0
+numpy>=1.24.0
+python-dotenv>=1.0.0 # Added for .env file support
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Optional: for better CLI output during development
+rich>=13.0.0
