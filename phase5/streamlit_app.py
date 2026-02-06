@@ -2,7 +2,15 @@ import streamlit as st
 import pandas as pd
 import requests
 import json
-from typing import List, Dict, Any
+import os
+import sys
+from requests import exceptions as req_exceptions
+from typing import List, Dict, Any, Optional
+
+# Ensure project root is on sys.path so `phase1`, `phase2`, `phase3`, etc. are importable
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 # Set page config
 st.set_page_config(
@@ -132,27 +140,143 @@ if 'cities' not in st.session_state:
 if 'recommendations' not in st.session_state:
     st.session_state.recommendations = []
 
+
+def _show_backend_run_instructions():
+    """Show instructions to the user for starting the backend server."""
+    BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:8001')
+    st.info(f"Backend not reachable at {BACKEND_URL}. To run the backend locally:")
+    st.code("python3 phase5/run_server.py", language='bash')
+    st.write("Or run python3 phase5/server.py directly (default port 8000), or set the BACKEND_URL environment variable to point to a running backend.")
+
+
+def _get_setting(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Get configuration from env var, falling back to Streamlit secrets.
+
+    Checks `os.environ` first, then `st.secrets` (if available), then returns `default`.
+    """
+    val = os.getenv(name)
+    if val:
+        return val
+    try:
+        # st.secrets acts like a dict when present
+        return st.secrets.get(name, default) if hasattr(st, 'secrets') else default
+    except Exception:
+        return default
+
 # Function to fetch cities from backend
 @st.cache_data(ttl=3600)  # Cache for 1 hour
 def load_cities():
     try:
-        response = requests.get('http://localhost:8001/api/cities')
+        # If EMBED_BACKEND env var / secret is set, initialize and use the embedded engine
+        if str(_get_setting('EMBED_BACKEND', '')).lower() in ('1', 'true', 'yes'):
+            try:
+                from phase1.data_loader import ZomatoDataLoader
+                from phase4.recommendation_engine import RecommendationEngine
+                from unittest.mock import Mock
+                from phase3.groq_client import GroqError, GroqClient, GroqConfig
+
+                api_key = _get_setting('GROQ_API_KEY')
+                if not api_key:
+                    groq_client = Mock()
+                    groq_client.get_recommendations.side_effect = GroqError("API key not available")
+                else:
+                    config = GroqConfig(api_key=api_key, model="llama-3.1-8b-instant")
+                    groq_client = GroqClient(config=config)
+
+                data_loader = ZomatoDataLoader(dataset_name="ManikaSaini/zomato-restaurant-recommendation")
+                data_loader.load_dataset()
+                data_loader.clean_and_validate()
+                engine = RecommendationEngine(data_loader, groq_client)
+                st.session_state.engine = engine
+                return engine.data_loader.get_unique_cities()
+            except Exception as e:
+                st.error(f"Failed to initialize embedded backend for cities: {e}")
+                # fallthrough to trying external backend
+
+        BACKEND_URL = _get_setting('BACKEND_URL', 'http://localhost:8001')
+        response = requests.get(f"{BACKEND_URL}/api/cities", timeout=5)
         if response.status_code == 200:
             return response.json()
         else:
             st.error(f"Failed to load cities: {response.status_code}")
             return []
-    except Exception as e:
+    except req_exceptions.RequestException as e:
         st.error(f"Error connecting to backend: {str(e)}")
+        _show_backend_run_instructions()
         return []
+    except Exception as e:
+        st.error(f"Unexpected error: {str(e)}")
+        return []
+
+
+def _preload_embedded_engine_with_progress():
+    """Preload the embedded recommendation engine and show progress in the UI.
+
+    This is called on app startup when `EMBED_BACKEND` is enabled. It stores
+    the built engine in `st.session_state.engine` and exposes progress messages.
+    """
+    if 'engine' in st.session_state:
+        return st.session_state.engine
+
+    if str(_get_setting('EMBED_BACKEND', '')).lower() not in ('1', 'true', 'yes'):
+        return None
+
+    placeholder = st.empty()
+    progress = st.progress(0)
+    try:
+        placeholder.info('Initializing embedded recommendation engine...')
+        progress.progress(5)
+
+        from unittest.mock import Mock
+        from phase3.groq_client import GroqError, GroqClient, GroqConfig
+        from phase1.data_loader import ZomatoDataLoader
+        from phase4.recommendation_engine import RecommendationEngine
+
+        api_key = _get_setting('GROQ_API_KEY')
+        if not api_key:
+            groq_client = Mock()
+            groq_client.get_recommendations.side_effect = GroqError('API key not available')
+        else:
+            placeholder.info('Configuring LLM client...')
+            progress.progress(15)
+            config = GroqConfig(api_key=api_key, model='llama-3.1-8b-instant')
+            groq_client = GroqClient(config=config)
+
+        placeholder.info('Loading dataset (this may take a while)...')
+        progress.progress(30)
+        data_loader = ZomatoDataLoader(dataset_name='ManikaSaini/zomato-restaurant-recommendation')
+        data_loader.load_dataset()
+        progress.progress(65)
+
+        placeholder.info('Cleaning and validating dataset...')
+        data_loader.clean_and_validate()
+        progress.progress(85)
+
+        placeholder.info('Creating recommendation engine...')
+        engine = RecommendationEngine(data_loader, groq_client)
+        st.session_state.engine = engine
+        progress.progress(100)
+        placeholder.success('Embedded engine ready')
+        return engine
+    except Exception as e:
+        placeholder.error(f'Failed to initialize embedded engine: {e}')
+        progress.empty()
+        return None
 
 # Load cities
 with st.spinner('Loading cities...'):
+    # Preload embedded engine (if enabled) so the app is responsive and cities are available
+    if str(_get_setting('EMBED_BACKEND', '')).lower() in ('1', 'true', 'yes'):
+        _preload_embedded_engine_with_progress()
+
     if not st.session_state.cities:
         st.session_state.cities = load_cities()
 
 # Sidebar filters
 st.sidebar.header("🔍 Filter Options")
+
+# Option to run embedded backend inside Streamlit
+use_embedded = st.sidebar.checkbox("Run backend inside this Streamlit app (no external server)", value=False)
 
 city = st.sidebar.selectbox(
     "Area/Locality",
@@ -204,25 +328,104 @@ with col4:
     if st.button("Find Restaurants", use_container_width=True):
         if st.session_state.city_main and st.session_state.cuisine_main and st.session_state.price_main:
             with st.spinner('Asking AI for personalized recommendations...'):
-                try:
-                    response = requests.post(
-                        'http://localhost:8001/api/recommendations',
-                        json={
-                            "city": st.session_state.city_main,
-                            "cuisine": st.session_state.cuisine_main,
-                            "price": float(st.session_state.price_main)
-                        },
-                        headers={'Content-Type': 'application/json'}
-                    )
-                    
-                    if response.status_code == 200:
-                        st.session_state.recommendations = response.json()
-                        if not st.session_state.recommendations:
-                            st.warning("No restaurants found matching your criteria. Try adjusting your filters.")
-                    else:
-                        st.error(f"Error: {response.status_code} - {response.text}")
-                except Exception as e:
-                    st.error(f"Error connecting to backend: {str(e)}")
+                # If user chose embedded backend, run recommendation pipeline locally
+                if use_embedded:
+                    try:
+                        from phase2.input_validation import validate_user_input
+
+                        # Initialize engine lazily
+                        def _init_embedded_engine() -> Optional[object]:
+                            if 'engine' in st.session_state:
+                                return st.session_state.engine
+                            try:
+                                from unittest.mock import Mock
+                                from phase3.groq_client import GroqConfig, GroqClient, GroqError
+                                from phase4.recommendation_engine import RecommendationEngine
+                                from phase1.data_loader import ZomatoDataLoader
+
+                                api_key = _get_setting('GROQ_API_KEY')
+                                if not api_key:
+                                    groq_client = Mock()
+                                    groq_client.get_recommendations.side_effect = GroqError("API key not available")
+                                else:
+                                    config = GroqConfig(api_key=api_key, model="llama-3.1-8b-instant")
+                                    groq_client = GroqClient(config=config)
+
+                                data_loader = ZomatoDataLoader(dataset_name="ManikaSaini/zomato-restaurant-recommendation")
+                                data_loader.load_dataset()
+                                data_loader.clean_and_validate()
+                                engine = RecommendationEngine(data_loader, groq_client)
+                                st.session_state.engine = engine
+                                return engine
+                            except Exception as e:
+                                st.error(f"Failed to initialize embedded backend: {e}")
+                                return None
+
+                        engine = _init_embedded_engine()
+                        if engine is None:
+                            st.error("Embedded backend initialization failed. Try running the external backend instead.")
+                        else:
+                            # Validate inputs against dataset lists
+                            available_cities = engine.data_loader.get_unique_cities()
+                            available_cuisines = engine.data_loader.get_unique_cuisines()
+                            try:
+                                validated = validate_user_input(
+                                    city=st.session_state.city_main,
+                                    cuisine=st.session_state.cuisine_main,
+                                    price=st.session_state.price_main,
+                                    available_cities=available_cities,
+                                    available_cuisines=available_cuisines,
+                                )
+
+                                recs = engine.get_recommendations(validated)
+                                # Convert dataclass objects to serializable dicts
+                                st.session_state.recommendations = [
+                                    {
+                                        'id': abs(hash(r.name)) % 10000,
+                                        'name': r.name,
+                                        'address': r.address,
+                                        'city': r.city,
+                                        'cuisines': r.cuisines,
+                                        'rating': r.rating,
+                                        'cost_for_two': r.cost_for_two,
+                                        'url': r.url or '',
+                                        'rest_type': '',
+                                        'location': r.city,
+                                        'reason': r.reason or 'Selected based on your preferences.'
+                                    }
+                                    for r in recs
+                                ]
+                                if not st.session_state.recommendations:
+                                    st.warning("No restaurants found matching your criteria. Try adjusting your filters.")
+                            except Exception as e:
+                                st.error(f"Input validation failed: {e}")
+                    except Exception as e:
+                        st.error(f"Embedded backend error: {e}")
+                else:
+                    try:
+                        BACKEND_URL = _get_setting('BACKEND_URL', 'http://localhost:8001')
+                        response = requests.post(
+                            f"{BACKEND_URL}/api/recommendations",
+                            json={
+                                "city": st.session_state.city_main,
+                                "cuisine": st.session_state.cuisine_main,
+                                "price": float(st.session_state.price_main)
+                            },
+                            headers={'Content-Type': 'application/json'},
+                            timeout=10
+                        )
+                        
+                        if response.status_code == 200:
+                            st.session_state.recommendations = response.json()
+                            if not st.session_state.recommendations:
+                                st.warning("No restaurants found matching your criteria. Try adjusting your filters.")
+                        else:
+                            st.error(f"Error: {response.status_code} - {response.text}")
+                    except req_exceptions.RequestException as e:
+                        st.error(f"Error connecting to backend: {str(e)}")
+                        _show_backend_run_instructions()
+                    except Exception as e:
+                        st.error(f"Unexpected error: {str(e)}")
         else:
             st.warning("Please select all filters")
 
