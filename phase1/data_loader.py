@@ -242,11 +242,19 @@ class ZomatoDataLoader:
         return self.processed_data
     
     def get_unique_cities(self) -> List[str]:
-        """Get list of unique cities in the dataset."""
+        """Get list of unique areas/localities in the dataset."""
         if self.processed_data is None:
             raise ValueError("Data not processed.")
         
-        return sorted(self.processed_data['city_normalized'].dropna().unique().tolist())
+        # Return the actual areas/localities from the 'city_normalized' column
+        # These are the real values that users should select from
+        if 'city_normalized' in self.processed_data.columns:
+            areas = self.processed_data['city_normalized'].dropna().unique().tolist()
+            # Filter out any non-area entries and sort
+            valid_areas = [area for area in areas if isinstance(area, str) and len(area.strip()) > 0]
+            return sorted(valid_areas)
+        
+        return ['Bangalore']  # Fallback
     
     def get_unique_cuisines(self) -> List[str]:
         """Get list of unique cuisines in the dataset."""

@@ -66,12 +66,25 @@ class RecommendationEngine:
         self.df = self.data_loader.get_processed_data()
 
     def _filter_by_city(self, df: pd.DataFrame, city: str) -> pd.DataFrame:
-        return df[df["city_normalized"] == city]
+        # The dataset has area names in 'city_normalized', not actual cities
+        # The user input city might be an area name like 'btm', 'koramangala', etc.
+        # So we need to match against the 'city_normalized' column which contains area names
+        city_lower = city.lower()
+        
+        # Filter by matching the area name in the 'city_normalized' column
+        mask = df['city_normalized'].apply(
+            lambda x: pd.notna(x) and city_lower in str(x).lower()
+        )
+        return df[mask]
 
     def _filter_by_cuisine(self, df: pd.DataFrame, cuisine: str) -> pd.DataFrame:
         # Check if cuisine is in the list of cuisines for each restaurant
         # Handles cases where cuisines_list might be empty or NaN
-        return df[df["cuisines_list"].apply(lambda x: cuisine in x if isinstance(x, list) else False)]
+        # Case-insensitive matching
+        cuisine_lower = cuisine.lower()
+        return df[df["cuisines_list"].apply(
+            lambda x: any(cuisine_lower in str(c).lower() for c in x) if isinstance(x, list) else False
+        )]
 
     def _filter_by_price(
         self, df: pd.DataFrame, price_pref: PricePreference
@@ -87,10 +100,16 @@ class RecommendationEngine:
         min_cost, max_cost = None, None
 
         if price_pref.exact is not None:
-            min_cost, max_cost = price_pref.as_range(
-                default_tolerance_pct=0.15, default_tolerance_abs=150.0
-            )
-            self.console.print(f"DEBUG: _filter_by_price - exact price, range: [{min_cost}, {max_cost}]")
+            # When exact is provided, it could be from a dropdown that represents a maximum
+            # For price ranges like "Budget (₹200 or less)", we should treat the value as a maximum
+            exact_val = price_pref.exact
+            # Use the exact value as the maximum allowed price
+            max_cost = exact_val
+            # For the minimum, use 0 to allow all values up to the maximum
+            min_cost = 0.0
+            
+            self.console.print(f"DEBUG: _filter_by_price - exact price interpreted as max: {max_cost}, min: {min_cost}")
+            # Only filter for values less than or equal to the maximum
             filtered_df = filtered_df[
                 (filtered_df["cost_numeric"] >= min_cost)
                 & (filtered_df["cost_numeric"] <= max_cost)
@@ -128,7 +147,8 @@ class RecommendationEngine:
                 self.console.print(f"DEBUG: _filter_by_price - Unknown price category: {price_pref.category}")
 
         self.console.print(f"DEBUG: _filter_by_price - final df length: {len(filtered_df)}")
-        self.console.print(f"DEBUG: _filter_by_price - final df costs: {filtered_df['cost_numeric'].tolist()}")
+        if not filtered_df.empty and 'cost_numeric' in filtered_df.columns:
+            self.console.print(f"DEBUG: _filter_by_price - final df costs: {sorted(filtered_df['cost_numeric'].dropna().tolist())}")
 
         return filtered_df
 
@@ -217,6 +237,8 @@ class RecommendationEngine:
             self.console.print(f"Groq LLM call failed: {e}. Falling back to deterministic ranking.")
 
         final_recommendations: List[RecommendedRestaurant] = []
+        seen_names = set()  # Track restaurant names to avoid duplicates
+        
         if llm_recs_response and llm_recs_response.recommendations:
             # Map LLM results back to full restaurant data
             llm_ranked_names = [r.name for r in llm_recs_response.recommendations]
@@ -226,6 +248,12 @@ class RecommendationEngine:
             ordered_df = candidates_df[candidates_df["name"].isin(llm_ranked_names)].set_index("name").reindex(llm_ranked_names).reset_index()
 
             for _, row in ordered_df.iterrows():
+                restaurant_name = row["name"]
+                # Skip if we've already added this restaurant
+                if restaurant_name in seen_names:
+                    continue
+                seen_names.add(restaurant_name)
+                
                 final_recommendations.append(
                     RecommendedRestaurant(
                         name=row["name"],
@@ -242,6 +270,12 @@ class RecommendationEngine:
             # 4. Fallback to Deterministic Ranking
             self.console.print("Using deterministic ranking for final recommendations.")
             for _, row in candidates_df.head(top_n).iterrows():
+                restaurant_name = row["name"]
+                # Skip if we've already added this restaurant
+                if restaurant_name in seen_names:
+                    continue
+                seen_names.add(restaurant_name)
+                
                 final_recommendations.append(
                     RecommendedRestaurant(
                         name=row["name"],

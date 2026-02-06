@@ -7,5 +7,11 @@ python-dotenv>=1.0.0 # Added for .env file support
 pytest>=7.4.0
 pytest-cov>=4.1.0
 
+# HTTP client for API calls
+httpx>=0.25.0
+
 # Optional: for better CLI output during development
 rich>=13.0.0
+
+# Streamlit for web app deployment
+streamlit>=1.28.0
