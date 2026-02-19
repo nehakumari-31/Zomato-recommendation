@@ -435,29 +435,36 @@ st.markdown('</div>', unsafe_allow_html=True)
 # Display recommendations
 if st.session_state.recommendations:
     st.header(f"🍽️ Top Restaurants for You ({len(st.session_state.recommendations)} found)")
-    
-    for restaurant in st.session_state.recommendations:
+
+    for i, restaurant in enumerate(st.session_state.recommendations):
+        name = restaurant.get('name', 'Unknown')
+        location = restaurant.get('location', restaurant.get('city', 'Unknown'))
+        cuisines = ', '.join(restaurant.get('cuisines', [])) or 'N/A'
+        rating = restaurant.get('rating', None)
+        cost = restaurant.get('cost_for_two', None)
+        reason = restaurant.get('reason', 'Selected based on your preferences.')
+        url = restaurant.get('url', '')
+
+        # Format numbers cleanly
+        rating_str = f"⭐ {rating:.1f}" if isinstance(rating, (int, float)) else "⭐ N/A"
+        cost_str = f"₹{int(cost)}" if isinstance(cost, (int, float)) else "₹N/A"
+
         with st.container():
-            st.markdown(f"""
-            <div class="restaurant-card">
-                <div class="restaurant-name">{restaurant.get('name', 'Unknown')}</div>
-                <div class="restaurant-location">{restaurant.get('location', restaurant.get('city', 'Unknown'))}</div>
-                <div class="restaurant-cuisines">{', '.join(restaurant.get('cuisines', []))}</div>
-                
-                <div class="restaurant-details">
-                    <div class="cost-info">₹{restaurant.get('cost_for_two', '0')} for two</div>
-                    <div class="rating-container">⭐ {restaurant.get('rating', 'N/A')}</div>
-                </div>
-                
-                <div class="reason-box">
-                    <strong>Why this place:</strong> {restaurant.get('reason', 'Selected based on your preferences.')}
-                </div>
-                
-                <a href="{restaurant.get('url', '#')}" target="_blank" class="order-link">
-                    Order Now →
-                </a>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"### {i+1}. {name}")
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                st.markdown(f"📍 **{location}**  \n🍴 {cuisines}")
+            with col2:
+                st.metric(label="Rating", value=rating_str)
+            with col3:
+                st.metric(label="Cost for two", value=cost_str)
+
+            st.markdown(f"> 💡 **Why this place:** {reason}")
+
+            if url and url != '#':
+                st.markdown(f"[🔗 Order Now on Zomato]({url})", unsafe_allow_html=False)
+
+            st.divider()
 else:
     st.info("Select your preferences above to get restaurant recommendations")
 
