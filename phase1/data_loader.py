@@ -220,7 +220,10 @@ class ZomatoDataLoader:
         # Ensure votes is numeric
         if 'votes' in df.columns:
             df['votes'] = pd.to_numeric(df['votes'], errors='coerce').fillna(0).astype(int)
-        
+
+        # Reset index to ensure clean 0-based integer index (prevents duplicate label errors)
+        df = df.reset_index(drop=True)
+
         self.processed_data = df
         print(f"Cleaning complete. Final dataset: {len(df)} rows")
         

@@ -244,16 +244,22 @@ class RecommendationEngine:
             llm_ranked_names = [r.name for r in llm_recs_response.recommendations]
             llm_reasons_map = {r.name: r.reason for r in llm_recs_response.recommendations}
 
-            # Re-order candidates_df based on LLM's ranking, keeping only LLM picks
-            ordered_df = candidates_df[candidates_df["name"].isin(llm_ranked_names)].set_index("name").reindex(llm_ranked_names).reset_index()
+            # Build a lookup: name → first matching row (handles duplicate names safely)
+            name_to_row = {}
+            for _, row in candidates_df[candidates_df["name"].isin(llm_ranked_names)].iterrows():
+                if row["name"] not in name_to_row:
+                    name_to_row[row["name"]] = row
 
-            for _, row in ordered_df.iterrows():
-                restaurant_name = row["name"]
+            # Iterate in LLM-ranked order
+            for restaurant_name in llm_ranked_names:
+                row = name_to_row.get(restaurant_name)
+                if row is None:
+                    continue
                 # Skip if we've already added this restaurant
                 if restaurant_name in seen_names:
                     continue
                 seen_names.add(restaurant_name)
-                
+
                 final_recommendations.append(
                     RecommendedRestaurant(
                         name=row["name"],
