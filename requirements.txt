@@ -1,7 +1,7 @@
 pandas>=2.0.0
 datasets>=2.14.0
 numpy>=1.24.0
-python-dotenv>=1.0.0 # Added for .env file support
+python-dotenv>=1.0.0
 
 # Testing
 pytest>=7.4.0
@@ -9,6 +9,9 @@ pytest-cov>=4.1.0
 
 # HTTP client for API calls
 httpx>=0.25.0
+
+# HTTP requests for Streamlit frontend
+requests>=2.31.0
 
 # Optional: for better CLI output during development
 rich>=13.0.0

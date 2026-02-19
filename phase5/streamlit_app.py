@@ -276,7 +276,8 @@ with st.spinner('Loading cities...'):
 st.sidebar.header("🔍 Filter Options")
 
 # Option to run embedded backend inside Streamlit
-use_embedded = st.sidebar.checkbox("Run backend inside this Streamlit app (no external server)", value=False)
+_embed_default = str(_get_setting('EMBED_BACKEND', '')).lower() in ('1', 'true', 'yes')
+use_embedded = st.sidebar.checkbox("Run backend inside this Streamlit app (no external server)", value=_embed_default)
 
 city = st.sidebar.selectbox(
     "Area/Locality",
